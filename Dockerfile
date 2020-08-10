@@ -13,6 +13,9 @@ COPY . /app
 # install git
 RUN apk add --no-cache git
 
+# install dev tools
+RUN apk add build-base
+
 # install docker
 # RUN apk add --update docker openrc
 # RUN rc-update add docker boot
