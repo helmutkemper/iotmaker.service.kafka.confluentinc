@@ -1,71 +1,78 @@
-#docker run --rm --name test -d golang:alpine3.12 tail -f /dev/null
-#docker exec -it test sh
-#unix:///var/run/docker.sock
-#docker run --name delete -p 3000:3000 -v //var/run/docker.sock:/var/run/docker.sock delete:latest
+#
+# Copyright 2019 Confluent Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-FROM golang:alpine3.12 as builder
+ARG DOCKER_UPSTREAM_REGISTRY
+ARG DOCKER_UPSTREAM_TAG=ubi8-latest
 
-RUN mkdir /app
-RUN chmod 700 /app
+FROM ${DOCKER_UPSTREAM_REGISTRY}confluentinc/cp-base-new:${DOCKER_UPSTREAM_TAG}
 
-COPY . /app
+ARG PROJECT_VERSION
+ARG ARTIFACT_ID
+ARG GIT_COMMIT
 
-# install git
-RUN apk add --no-cache git
+LABEL maintainer="partner-support@confluent.io"
+LABEL vendor="Confluent"
+LABEL version=$GIT_COMMIT
+LABEL release=$PROJECT_VERSION
+LABEL name=$ARTIFACT_ID
+LABEL summary="ZooKeeper is a centralized service for maintaining configuration information, naming, providing distributed synchronization, and providing group services."
+LABEL io.confluent.docker=true
+LABEL io.confluent.docker.git.id=$GIT_COMMIT
+ARG BUILD_NUMBER=-1
+LABEL io.confluent.docker.build.number=$BUILD_NUMBER
+LABEL io.confluent.docker.git.repo="confluentinc/kafka-images"
 
-# install dev tools
-RUN apk add build-base
+ARG CONFLUENT_VERSION
+ARG CONFLUENT_PACKAGES_REPO
+ARG CONFLUENT_PLATFORM_LABEL
 
-# install docker
-# RUN apk add --update docker openrc
-# RUN rc-update add docker boot
+EXPOSE 2181 2888 3888
 
-# make libraries folder from git project
-RUN mkdir /go/src/github.com
-RUN mkdir /go/src/github.com/docker
+ENV COMPONENT=zookeeper
 
-# change dir
-WORKDIR /go/src/github.com/docker
+USER root
 
-RUN apk update && apk add --no-cache wget
-RUN wget https://github.com/moby/moby/archive/v19.03.11.tar.gz
-RUN tar -xzf v19.03.11.tar.gz && rm v19.03.11.tar.gz
-RUN mv moby-19.03.11 docker
+RUN echo "===> Installing ${COMPONENT}..." \
+    && echo "===> Adding confluent repository...${CONFLUENT_PACKAGES_REPO}" \
+    && rpm --import ${CONFLUENT_PACKAGES_REPO}/archive.key \
+    && printf "[Confluent.dist] \n\
+name=Confluent repository (dist) \n\
+baseurl=${CONFLUENT_PACKAGES_REPO}/\$releasever \n\
+gpgcheck=1 \n\
+gpgkey=${CONFLUENT_PACKAGES_REPO}/archive.key \n\
+enabled=1 \n\
+\n\
+[Confluent] \n\
+name=Confluent repository \n\
+baseurl=${CONFLUENT_PACKAGES_REPO}/ \n\
+gpgcheck=1 \n\
+gpgkey=${CONFLUENT_PACKAGES_REPO}/archive.key \n\
+enabled=1 " > /etc/yum.repos.d/confluent.repo \
+    && yum install -y confluent-kafka-${CONFLUENT_VERSION} \
+    && echo "===> clean up ..."  \
+    && yum clean all \
+    && rm -rf /tmp/* \
+    && echo "===> Setting up ${COMPONENT} dirs" \
+    && mkdir -p /var/lib/${COMPONENT}/data /var/lib/${COMPONENT}/log /etc/${COMPONENT}/secrets \
+    && chmod -R ag+w /etc/kafka /var/lib/${COMPONENT}/data /var/lib/${COMPONENT}/log /etc/${COMPONENT}/secrets \
+    && chown -R appuser:appuser /var/log/kafka /var/log/confluent /var/lib/kafka /var/lib/zookeeper /etc/${COMPONENT}/secrets
 
-RUN go get godoc.org/golang.org/x/sys/windows; exit 0
-RUN go get golang.org/x/crypto; exit 0
-RUN go get golang.org/x/net; exit 0
-RUN go get golang.org/x/text; exit 0
-RUN go get github.com/opencontainers/go-digest; exit 0
-RUN go get github.com/opencontainers/image-spec/specs-go/v1; exit 0
-RUN go get github.com/containerd/containerd; exit 0
-RUN go get google.golang.org/genproto/googleapis/rpc/status; exit 0
-RUN go get github.com/golang/protobuf/proto; exit 0
-RUN go get google.golang.org/grpc/codes; exit 0
-RUN go get github.com/sirupsen/logrus; exit 0
-RUN go get github.com/pkg/errors; exit 0
-RUN go get github.com/gogo/protobuf/proto; exit 0
-RUN go get github.com/docker/go-units; exit 0
-RUN go get github.com/docker/distribution/reference; exit 0
-RUN go get github.com/Microsoft/go-winio; exit 0
-RUN go get github.com/helmutkemper/iotmaker.docker.util.whaleAquarium; exit 0
-RUN go get github.com/helmutkemper/iotmaker.docker; exit 0
+VOLUME ["/var/lib/${COMPONENT}/data", "/var/lib/${COMPONENT}/log", "/etc/${COMPONENT}/secrets"]
 
-WORKDIR /
-RUN find . -name vendor -type d -exec rm -rf {} +
+COPY --chown=appuser:appuser include/etc/confluent/docker /etc/confluent/docker
 
-# install moby project - end
+USER appuser
 
-# import golang packages to be used inside image "scratch"
-ARG CGO_ENABLED=0
-RUN go build -o /app/main /app/main.go
-
-FROM scratch
-
-COPY --from=builder /app .
-
-VOLUME /var/run/docker.sock
-# VOLUME /app/static/
-EXPOSE 3000
-
-CMD ["./main"]
+CMD ["/etc/confluent/docker/run"]
